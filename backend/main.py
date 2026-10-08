@@ -20,6 +20,7 @@ from collections import Counter
 import pandas as pd
 import numpy as np
 import io
+import threading
 
 from preprocessing_service import run_pipeline
 from tfidf_service import build_tfidf, get_summary, get_document_weights
@@ -46,7 +47,12 @@ STATE = {
     "tfidf_matrix": None,
     "labels": None,
     "last_comparison": None,
+    "dataset_version": 0,      # naik setiap dataset aktif berubah; dipakai untuk membatalkan hasil basi
 }
+
+# Status pekerjaan preprocessing (berjalan di thread latar belakang)
+PREP_JOB = {"state": "idle", "done": 0, "total": 0, "error": None}
+PREP_LOCK = threading.Lock()
 
 
 def _reset_downstream_state():
@@ -56,6 +62,7 @@ def _reset_downstream_state():
     STATE["tfidf_matrix"] = None
     STATE["labels"] = None
     STATE["last_comparison"] = None
+    STATE["dataset_version"] += 1
 
 
 # ================== DATASET ==================
@@ -187,21 +194,49 @@ async def reset_balance():
 
 # ================== PREPROCESSING ==================
 
+def _preprocess_worker(df: pd.DataFrame, version: int):
+    """Berjalan di thread terpisah supaya server tetap bisa menjawab permintaan lain."""
+    try:
+        results = []
+        for idx, row in df.iterrows():
+            pipeline_result = run_pipeline(str(row["Customer Review"]))
+            pipeline_result["row_id"] = int(idx)
+            pipeline_result["sentiment"] = row["Sentiment"]
+            results.append(pipeline_result)
+            PREP_JOB["done"] = len(results)
+
+        if version != STATE["dataset_version"]:
+            PREP_JOB["error"] = "Dataset berubah saat preprocessing berjalan. Jalankan ulang."
+            PREP_JOB["state"] = "error"
+            return
+        STATE["preprocessed"] = results
+        PREP_JOB["state"] = "done"
+    except Exception as e:  # noqa: BLE001
+        PREP_JOB["error"] = f"Preprocessing gagal: {e}"
+        PREP_JOB["state"] = "error"
+
+
 @app.post("/api/preprocessing/run")
-async def run_preprocessing():
+def run_preprocessing():
+    """Memulai preprocessing di latar belakang dan langsung membalas. Pantau lewat /status."""
     df = STATE["dataset"]
     if df is None:
         raise HTTPException(400, "Belum ada dataset yang diupload")
 
-    results = []
-    for idx, row in df.iterrows():
-        pipeline_result = run_pipeline(str(row["Customer Review"]))
-        pipeline_result["row_id"] = int(idx)
-        pipeline_result["sentiment"] = row["Sentiment"]
-        results.append(pipeline_result)
+    with PREP_LOCK:
+        if PREP_JOB["state"] == "running":
+            return {"message": "Preprocessing sedang berjalan", "status": "running", "total_rows": PREP_JOB["total"]}
+        PREP_JOB.update(state="running", done=0, total=len(df), error=None)
 
-    STATE["preprocessed"] = results
-    return {"message": "Preprocessing selesai", "total_rows": len(results)}
+    threading.Thread(
+        target=_preprocess_worker, args=(df.copy(), STATE["dataset_version"]), daemon=True
+    ).start()
+    return {"message": "Preprocessing dimulai", "status": "running", "total_rows": len(df)}
+
+
+@app.get("/api/preprocessing/status")
+def preprocessing_status():
+    return dict(PREP_JOB)
 
 
 @app.get("/api/preprocessing/result/{row_id}")
@@ -261,7 +296,7 @@ async def unmapped_slang_summary(top_n: int = 30):
 # ================== PENCARIAN TEKS ==================
 
 @app.get("/api/search")
-async def search_text(query: str, metric: str = "cosine", k: int = 5):
+def search_text(query: str, metric: str = "cosine", k: int = 5):
     results = STATE["preprocessed"]
     if results is None:
         raise HTTPException(400, "Preprocessing belum dijalankan")
@@ -311,7 +346,7 @@ async def search_text(query: str, metric: str = "cosine", k: int = 5):
 # ================== TF-IDF ==================
 
 @app.post("/api/tfidf/extract")
-async def extract_tfidf():
+def extract_tfidf():
     results = STATE["preprocessed"]
     if results is None:
         raise HTTPException(400, "Preprocessing belum dijalankan")
@@ -380,7 +415,7 @@ def _validate_cv(n_splits: int, labels: np.ndarray, k_values: list[int]):
 
 
 @app.post("/api/classify/single")
-async def classify_single(req: SingleRunRequest):
+def classify_single(req: SingleRunRequest):
     clean_texts, labels = _require_preprocessed()
     if req.metric not in METRICS:
         raise HTTPException(400, f"Metrik harus salah satu dari: {', '.join(METRICS)}")
@@ -390,7 +425,7 @@ async def classify_single(req: SingleRunRequest):
 
 
 @app.post("/api/classify/compare")
-async def classify_compare(req: ComparisonRequest):
+def classify_compare(req: ComparisonRequest):
     clean_texts, labels = _require_preprocessed()
     _validate_cv(req.n_splits, labels, req.k_values)
 
@@ -414,7 +449,7 @@ class PredictRequest(BaseModel):
 
 
 @app.post("/api/predict")
-async def predict_text(req: PredictRequest):
+def predict_text(req: PredictRequest):
     """
     Memprediksi satu ulasan dengan KETIGA metrik jarak sekaligus, supaya
     perbedaan perilaku Euclidean, Manhattan, dan Cosine terlihat langsung.
