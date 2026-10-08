@@ -1,0 +1,73 @@
+# =====================================================================
+# .gitignore - Analisis Performa Formula Jarak terhadap KNN
+#              (backend FastAPI/Python + frontend Next.js)
+#
+# Hampir semua pola di bawah berlaku di folder mana pun, jadi file yang
+# sama bisa ditaruh di root repo gabungan (berisi backend/ dan frontend/)
+# ATAU disalin ke tiap repo terpisah.
+# =====================================================================
+
+# --- Python: virtual environment (berat, dibuat ulang dari requirements.txt)
+venv/
+.venv/
+env/
+ENV/
+
+# --- Python: cache dan hasil build
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Node.js / Next.js (dibuat ulang oleh npm install dan next build)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Rahasia dan konfigurasi lokal (jangan pernah di-commit)
+.env
+.env.*
+!.env.example
+*.pem
+
+# --- Log
+*.log
+logs/
+
+# --- Hasil ekspor aplikasi, kalau tersalin ke folder proyek
+laporan_hasil_klasifikasi*.pdf
+hasil_perbandingan_metrik_jarak*.csv
+
+# --- Dataset mentah ulasan Tokopedia.
+#     Dikecualikan karena berukuran besar dan berisi teks hasil scraping
+#     (GitHub menolak file di atas 100 MB). Aplikasi memuatnya lewat
+#     tombol unggah, jadi tidak perlu ada di repo. Hapus blok ini bila
+#     dataset memang ingin ikut disimpan.
+#     Pola dengan awalan "/" hanya berlaku di folder paling atas, supaya
+#     folder halaman Dataset di frontend (app/dataset) TIDAK ikut terabaikan.
+data/
+/dataset/
+/datasets/
+/backend/dataset/
+/backend/datasets/
+# CATATAN: kamus_alay.csv dan kamus_antonim.csv SENGAJA ikut di-commit
+# karena dibaca langsung oleh backend. Jangan menambahkan "*.csv" di sini.
+
+# --- Editor dan sistem operasi
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
